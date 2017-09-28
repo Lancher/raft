@@ -1,0 +1,24 @@
+{
+	"ImportPath": "github.com/Lancher/raft",
+	"GoVersion": "go1.9",
+	"GodepVersion": "v79",
+	"Deps": [
+		{
+			"ImportPath": "github.com/sirupsen/logrus",
+			"Comment": "v1.0.3-11-g89742ae",
+			"Rev": "89742aefa4b206dcf400792f3bd35b542998eb3b"
+		},
+		{
+			"ImportPath": "golang.org/x/crypto/ssh/terminal",
+			"Rev": "c84b36c635ad003a10f0c755dff5685ceef18c71"
+		},
+		{
+			"ImportPath": "golang.org/x/sys/unix",
+			"Rev": "314a259e304ff91bd6985da2a7149bbf91237993"
+		},
+		{
+			"ImportPath": "golang.org/x/sys/windows",
+			"Rev": "314a259e304ff91bd6985da2a7149bbf91237993"
+		}
+	]
+}
