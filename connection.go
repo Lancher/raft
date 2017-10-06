@@ -3,14 +3,14 @@ package main
 import (
 	"net"
 	"encoding/json"
-	log "github.com/sirupsen/logrus"
+	//log "github.com/sirupsen/logrus"
 )
 
-func SendPacket(ip string, packet Packet)  {
+func SendPacket(packet Packet)  {
 	go func() {
-		conn, err := net.Dial("tcp", ip)
+		conn, err := net.Dial("tcp", packet.DST_ID)
 		if err != nil {
-			log.Error(err.Error())
+			//log.Error(packet.Id, ": ", "client failed to dail to ", packet.DST_ID, " because ", err.Error())
 			return
 		}
 		defer conn.Close()
@@ -18,5 +18,6 @@ func SendPacket(ip string, packet Packet)  {
 		bytes, err := json.Marshal(packet)
 		newline := "\n"
 		conn.Write(append(bytes, newline...))
+		//log.Error(packet.Id, ": ", "client dailed to ", packet.DST_ID)
 	}()
 }

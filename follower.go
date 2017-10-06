@@ -5,92 +5,129 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type Follower struct {
-	stop_chan chan bool
-	wait_append_request_timeout_index int
-	wait_append_request_timeout chan int
-}
+func FollowerHandleReceivePacket(state *State, rec Packet)  {
+	// AppendRequest
+	if rec.Name == "AppendRequest" {
+		if state.CurrentTerm < rec.Term {
+			// log
+			log.Info(state.Ip, ": ", "follower got AppendRequest with greater term (normal)")
 
-func (follower *Follower) Start(state *State,
-	be_c chan bool, be_f chan bool, be_l chan bool, packet_chan chan Packet)  {
+			// user, term, vote
+			state.User = "follower"
+			state.CurrentTerm = rec.Term
+			state.Vote = 1
 
-	log.Info("Follower Start")
+			// send packet
+			packet := Packet{Name: "AppendResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm}
+			state.SendPacketChan <- packet
 
-	follower.stop_chan = make(chan bool, 10)
-	follower.wait_append_request_timeout_index = 0
-	follower.wait_append_request_timeout = make(chan int, 100)
+			// start timeout
+			FollowerStartWaitAppendRequestTimeout(state)
+		} else if state.CurrentTerm == rec.Term {
+			// log
+			log.Info(state.Ip, ": ", "follower got AppendRequest with the same term (normal)")
 
-	go func() {
+			// send packet
+			packet := Packet{Name: "AppendResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm}
+			state.SendPacketChan <- packet
 
-		follower.StartWaitAppendRequestTimeout()
+			// start timeout
+			FollowerStartWaitAppendRequestTimeout(state)
+		} else if state.CurrentTerm > rec.Term {
+			// log
+			log.Info(state.Ip, ": ", "follower got AppendRequest with the smaller term (ignore the request)")
 
-	outer:
-		for {
-			select {
-			case <- follower.wait_append_request_timeout:
-
-				// --- VoteRequest ----
-				state.User = "candidate"
-				be_c <- true
-			case req := <- packet_chan:
-				log.Info("follower", "get", req)
-
-				// --- AppendRequest ---
-				if req.Name == "AppendRequest" {
-					if req.Term > state.CurrentTerm {
-						state.UpdateCurrentTerm(req.Term)
-					} else if req.Term == state.CurrentTerm {
-					} else {
-					}
-					follower.StartWaitAppendRequestTimeout()
-					res := Packet{Name: "AppendResponse", Id: state.Ip, Term: state.CurrentTerm}
-					SendPacket(req.Id, res)
-
-				// --- VoteRequest ----
-				} else if req.Name == "VoteRequest" {
-					if req.Term > state.CurrentTerm {
-						state.UpdateCurrentTerm(req.Term)
-						state.Vote = 0
-						res := Packet{Name: "VoteResponse", Id: state.Ip, Term: state.CurrentTerm, VoteGranted: true}
-						SendPacket(req.Id, res)
-					} else if req.Term == state.CurrentTerm {
-						if state.Vote == 1 {
-							state.Vote = 0
-							res := Packet{Name: "VoteResponse", Id: state.Ip, Term: state.CurrentTerm, VoteGranted: true}
-							SendPacket(req.Id, res)
-						} else {
-							res := Packet{Name: "VoteResponse", Id: state.Ip, Term: state.CurrentTerm, VoteGranted: false}
-							SendPacket(req.Id, res)
-						}
-					} else {
-						res := Packet{Name: "VoteResponse", Id: state.Ip, Term: state.CurrentTerm, VoteGranted: false}
-						SendPacket(req.Id, res)
-					}
-				}
-			case <- follower.stop_chan:
-				break outer
-			}
+			// send packet
+			packet := Packet{Name: "AppendResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm}
+			state.SendPacketChan <- packet
 		}
-	}()
+
+	// AppendResponse
+	} else if rec.Name == "AppendResponse" {
+		if state.CurrentTerm < rec.Term {
+			// log
+			log.Warning(state.Ip, ": ", "follower got AppendResponse with greater term (should not happened)")
+		} else if state.CurrentTerm == rec.Term {
+			// log
+			log.Warning(state.Ip, ": ", "follower got AppendResponse with the same term (should not happened)")
+		} else if state.CurrentTerm > rec.Term {
+			// log
+			log.Info(state.Ip, ": ", "follower got AppendResponse with less term (ignore late response)")
+		}
+
+		// VoteRequest
+	}else if rec.Name == "VoteRequest" {
+		if state.CurrentTerm < rec.Term {
+			// log
+			log.Info(state.Ip, ": ", "follower got VoteRequest with greater term and then become candidate (normal)")
+
+			// user, term, vote
+			state.User = "follower"
+			state.CurrentTerm = rec.Term
+			state.Vote = 0
+
+			// send packet
+			packet := Packet{Name: "VoteResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm, VoteGranted:true}
+			state.SendPacketChan <- packet
+		} else if state.CurrentTerm == rec.Term {
+			// log
+			log.Info(state.Ip, ": ", "follower got VoteRequest with the same term (normal)")
+
+			// send packet
+			if state.Vote == 1 {
+				state.Vote = 0
+				packet := Packet{Name: "VoteResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm, VoteGranted:true}
+				state.SendPacketChan <- packet
+			} else {
+				packet := Packet{Name: "VoteResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm, VoteGranted:false}
+				state.SendPacketChan <- packet
+			}
+		} else if state.CurrentTerm > rec.Term {
+			// log
+			log.Info(state.Ip, ": ", "follower got VoteRequest with less term (normal)")
+
+			// send packet
+			packet := Packet{Name: "VoteResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm, VoteGranted:false}
+			state.SendPacketChan <- packet
+		}
+
+	// VoteResponse
+	}else if rec.Name == "VoteResponse" {
+		if state.CurrentTerm < rec.Term {
+			// log
+			log.Warning(state.Ip, ": ", "follower got VoteResponse with greater term (should not happened)")
+		} else if state.CurrentTerm == rec.Term {
+			// log
+			log.Warning(state.Ip, ": ", "follower got VoteResponse with the same term (should not happened)")
+		} else if state.CurrentTerm > rec.Term {
+			// log
+			log.Info(state.Ip, ": ", "follower got VoteResponse with smaller term (ignore late response)")
+		}
+	}
 }
 
-func (follower *Follower) Stop()  {
-	log.Info("Follower Stop")
+func FollowerStartWaitAppendRequestTimeout(state *State)  {
 
-	follower.stop_chan = make(chan bool, 10)
-	follower.wait_append_request_timeout_index = 0
-	follower.wait_append_request_timeout = make(chan int, 100)
+	state.wait_append_request_timeout_index ++
+	index := state.wait_append_request_timeout_index
 
-	follower.stop_chan <- true
-}
-
-func (follower *Follower) StartWaitAppendRequestTimeout()  {
 	go func() {
-		follower.wait_append_request_timeout_index++
-		index := follower.wait_append_request_timeout_index
 
+		if state.User != "follower" { return }
 		time.Sleep(1500 * time.Millisecond)
 
-		follower.wait_append_request_timeout <- index
+		if state.User != "follower" { return }
+		if state.wait_append_request_timeout_index != index { return }
+		state.EventChan <- "wait_append_request_timeout"
 	}()
+}
+
+func FollowerBecomeCandidate(state *State)  {
+	// user, term, vote
+	state.User = "candidate"
+	state.CurrentTerm ++
+	state.Vote = 1
+
+	// event
+	state.EventChan <- "become_candidate"
 }

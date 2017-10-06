@@ -2,111 +2,134 @@ package main
 
 import (
 	log "github.com/sirupsen/logrus"
+	"time"
 )
 
-type Leader struct {
-	stop_chan chan bool
-	send_append_request_timeout_index int
-	send_append_request_timeout chan int
+
+func LeaderHandleReceivePacket(state *State, rec Packet)  {
+	// AppendRequest
+	if rec.Name == "AppendRequest" {
+		if state.CurrentTerm < rec.Term {
+			// log
+			log.Info(state.Ip, ": ", "leader got AppendRequest with the greater term and then become follower (normal)")
+
+			// user, term, vote
+			state.User = "follower"
+			state.CurrentTerm = rec.Term
+			state.Vote = 1
+
+			// send packet
+			packet := Packet{Name: "AppendResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm}
+			state.SendPacketChan <- packet
+
+			// become follower event
+			state.EventChan <- "become_follower"
+		} else if state.CurrentTerm == rec.Term {
+			// log
+			log.Warning(state.Ip, ": ", "leader got AppendRequest with the same term (should not happened)")
+		} else if state.CurrentTerm > rec.Term {
+			//log
+			log.Info(state.Ip, ": ", "leader got AppendRequest with the smaller term (normal)")
+
+			// send packet
+			packet := Packet{Name: "AppendResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm}
+			state.SendPacketChan <- packet
+		}
+
+		// AppendResponse
+	} else if rec.Name == "AppendResponse" {
+		if state.CurrentTerm < rec.Term {
+			//log
+			log.Info(state.Ip, ": ", "leader got AppendResponse with the greater term and then become follower (normal)")
+
+			// user, term, vote
+			state.User = "follower"
+			state.CurrentTerm = rec.Term
+			state.Vote = 1
+
+			// send packet
+			packet := Packet{Name: "AppendResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm}
+			state.SendPacketChan <- packet
+
+			// become follower event
+			state.EventChan <- "become_follower"
+		} else if state.CurrentTerm == rec.Term {
+			// log
+			log.Info(state.Ip, ": ", "leader got AppendResponse with the same term (normal)")
+		} else if state.CurrentTerm > rec.Term {
+			//log
+			log.Info(state.Ip, ": ", "leader got AppendResponse with smaller term (ignore late response)")
+		}
+
+	// VoteRequest
+	}else if rec.Name == "VoteRequest" {
+		if state.CurrentTerm < rec.Term {
+			//log
+			log.Info(state.Ip, ": ", "leader got VoteRequest with the greater term and then become follower (normal)")
+
+			// user, term, vote
+			state.User = "follower"
+			state.CurrentTerm = rec.Term
+			state.Vote = 0
+
+			// send packet
+			packet := Packet{Name: "VoteResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm, VoteGranted: true}
+			state.SendPacketChan <- packet
+
+			// become follower event
+			state.EventChan <- "become_follower"
+		} else if state.CurrentTerm == rec.Term {
+			//log
+			log.Info(state.Ip, ": ", "leader got VoteRequest with the same term (normal)")
+
+			// send packet
+			packet := Packet{Name: "VoteResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm, VoteGranted: false}
+			state.SendPacketChan <- packet
+		} else if state.CurrentTerm > rec.Term {
+			//log
+			log.Info(state.Ip, ": ", "leader got VoteRequest with the smaller term (normal)")
+
+			// send packet
+			packet := Packet{Name: "VoteResponse", Id: state.Ip, DST_ID: rec.Id, Term: state.CurrentTerm, VoteGranted: false}
+			state.SendPacketChan <- packet
+		}
+
+	// VoteResponse
+	}else if rec.Name == "VoteResponse" {
+		if state.CurrentTerm < rec.Term {
+			log.Warning(state.Ip, ": ", "leader got VoteResponse with greater term (should not happened)")
+		} else if state.CurrentTerm == rec.Term {
+			log.Warning(state.Ip, ": ", "leader got VoteResponse with the same term (should not happened)")
+		} else if state.CurrentTerm > rec.Term {
+			log.Info(state.Ip, ": ", "leader got VoteResponse with smaller term (ignore late response)")
+		}
+	}
 }
 
-func (leader *Leader) Start(state *State,
-	be_c chan bool, be_f chan bool, be_l chan bool, packet_chan chan Packet)  {
-	log.Info("Leader Start")
+func LeaderStartSendAppendRequestTimeout(state *State)  {
 
-	leader.stop_chan = make(chan bool, 10)
-	leader.send_append_request_timeout_index = 0
-	leader.send_append_request_timeout = make(chan int, 100)
+	state.send_append_request_timeout_index ++
+	index := state.send_append_request_timeout_index
 
 	go func() {
+		if state.User != "leader" { return }
+		time.Sleep(time.Duration(1000) * time.Millisecond)
 
-		leader.SendAppendRequest(state)
-
-	outer:
-		for {
-			select {
-			case <- leader.send_append_request_timeout:
-				// --- AppendRequest ---
-				leader.SendAppendRequest(state)
-			case req := <- packet_chan:
-				log.Info("leader", "get", req)
-
-				// --- AppendRequest ---
-				if req.Name == "AppendRequest" {
-					if req.Term > state.CurrentTerm {
-						state.UpdateCurrentTerm(req.Term)
-						res := Packet{Name: "AppendResponse", Id: state.Ip, Term: state.CurrentTerm}
-						SendPacket(req.Id, res)
-						state.User = "follower"
-						be_f <- true
-					} else if req.Term == state.CurrentTerm {
-						res := Packet{Name: "AppendResponse", Id: state.Ip, Term: state.CurrentTerm}
-						SendPacket(req.Id, res)
-					} else {
-						res := Packet{Name: "AppendResponse", Id: state.Ip, Term: state.CurrentTerm}
-						SendPacket(req.Id, res)
-					}
-
-				// --- VoteRequest ---
-				} else if req.Name == "VoteRequest" {
-					if req.Term > state.CurrentTerm {
-						state.UpdateCurrentTerm(req.Term)
-						state.Vote = 0
-						res := Packet{Name: "VoteResponse", Id: state.Ip, Term: state.CurrentTerm, VoteGranted: true}
-						SendPacket(req.Id, res)
-						state.User = "follower"
-						be_f <- true
-					} else if req.Term == state.CurrentTerm {
-						res := Packet{Name: "VoteResponse", Id: state.Ip, Term: state.CurrentTerm, VoteGranted: false}
-						SendPacket(req.Id, res)
-					} else {
-						res := Packet{Name: "VoteResponse", Id: state.Ip, Term: state.CurrentTerm, VoteGranted: false}
-						SendPacket(req.Id, res)
-					}
-
-				// --- AppendResponse ---
-				} else if req.Name == "AppendResponse" {
-					if req.Term > state.CurrentTerm {
-						state.UpdateCurrentTerm(req.Term)
-						state.User = "follower"
-						be_f <- true
-					} else if req.Term == state.CurrentTerm {
-					} else {
-					}
-
-				// --- VoteResponse ---
-				} else if req.Name == "VoteResponse" {
-					if req.Term > state.CurrentTerm {
-						state.UpdateCurrentTerm(req.Term)
-						state.User = "follower"
-						be_f <- true
-					} else if req.Term == state.CurrentTerm {
-					} else {
-					}
-				}
-
-			case <- leader.stop_chan:
-				break outer
-			}
-		}
+		if state.User != "leader" { return }
+		if state.send_append_request_timeout_index != index { return }
+		state.EventChan <- "send_append_request_timeout"
 	}()
 }
 
-func (leader *Leader) Stop()  {
-	log.Info("Leader Stop")
+func LeaderSendAppendRequest(state *State)  {
+	// log
+	log.Info(state.Ip, ": ", "leader sent AppendRequest to ", state.Ips)
 
-	leader.stop_chan = make(chan bool, 10)
-	leader.send_append_request_timeout_index = 0
-	leader.send_append_request_timeout = make(chan int, 100)
-
-	leader.stop_chan <- true
-}
-
-func (leader *Leader) SendAppendRequest(state *State)  {
 	go func() {
 		for _, ip := range state.Ips {
-			req := Packet{Name: "AppendRequest", Id: state.Ip, Term: state.CurrentTerm}
-			SendPacket(ip, req)
+			if state.User != "leader" { return }
+			packet := Packet{Name: "AppendRequest", Id: state.Ip, DST_ID:ip, Term: state.CurrentTerm}
+			state.SendPacketChan <- packet
 		}
 	}()
 }
